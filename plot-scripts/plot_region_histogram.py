@@ -24,10 +24,12 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
     # Store current selected region
     selected_region = [0]  # Default to region 0
     
-    # Store current percentage filter
-    current_percent = ['100%']  # '10%', '50%', '100%'
+    # Store current influence type
+    current_influence_type = ['positive']  # 'positive' or 'negative'
+    current_regions_data = [regions_data]
     
     # Calculate region grid positions (row, col) for distance calculation
+    # This only needs to be done once since region positions don't change
     region_positions = []
     for region_idx in range(num_regions):
         region_key = f'region_{region_idx:02d}'
@@ -44,29 +46,33 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
     # Store histogram plot
     hist_plot = [None]
     
-    # Add percentage filter buttons at the top
-    ax_top10 = plt.axes([0.1, 0.92, 0.15, 0.04])
-    ax_top50 = plt.axes([0.3, 0.92, 0.15, 0.04])
-    ax_100 = plt.axes([0.5, 0.92, 0.15, 0.04])
+    # Add influence type buttons at the top
+    ax_positive = plt.axes([0.1, 0.92, 0.2, 0.04])
+    ax_negative = plt.axes([0.35, 0.92, 0.2, 0.04])
     
-    btn_top10 = widgets.Button(ax_top10, 'Top 10%', hovercolor='lightblue')
-    btn_top50 = widgets.Button(ax_top50, 'Top 50%', hovercolor='lightgreen')
-    btn_100 = widgets.Button(ax_100, '100%', hovercolor='lightcoral')
+    btn_positive = widgets.Button(ax_positive, 'Positive Influence', hovercolor='lightgreen')
+    btn_negative = widgets.Button(ax_negative, 'Negative Influence', hovercolor='lightcoral')
+    
+    def load_influence_data(influence_type):
+        """Load the appropriate regions data based on influence type."""
+        if influence_type == "positive":
+            return np.load(os.path.join(TOOL_DATA_DIR, 'regions_data_positive.npy'), allow_pickle=True).item()
+        elif influence_type == "negative":
+            return np.load(os.path.join(TOOL_DATA_DIR, 'regions_data_negative.npy'), allow_pickle=True).item()
+        else:
+            return current_regions_data[0]
     
     def update_button_colors():
-        """Update button colors to highlight the active percentage."""
+        """Update button colors to highlight the active influence type."""
         # Reset all buttons to default colors
-        btn_top10.color = 'lightgray'
-        btn_top50.color = 'lightgray'
-        btn_100.color = 'lightgray'
+        btn_positive.color = 'lightgray'
+        btn_negative.color = 'lightgray'
         
         # Highlight the active button
-        if current_percent[0] == '10%':
-            btn_top10.color = 'lightblue'
-        elif current_percent[0] == '50%':
-            btn_top50.color = 'lightgreen'
-        elif current_percent[0] == '100%':
-            btn_100.color = 'lightcoral'
+        if current_influence_type[0] == "positive":
+            btn_positive.color = 'lightgreen'
+        elif current_influence_type[0] == "negative":
+            btn_negative.color = 'lightcoral'
     
     def calculate_distances(region_idx):
         """Calculate grid-based distances from selected region to all other regions.
@@ -78,12 +84,17 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
         - etc.
         
         Uses Chebyshev distance (max of row and column differences).
+        
+        Returns:
+            distances: array of distances
+            region_indices: array of corresponding region indices
         """
         if region_idx >= len(region_positions):
-            return np.array([])
+            return np.array([]), np.array([])
         
         selected_pos = region_positions[region_idx]
         distances = []
+        region_indices = []
         
         for i in range(num_regions):
             if i != region_idx:
@@ -94,8 +105,9 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
                 col_diff = abs(selected_pos[1] - other_pos[1])
                 dist = max(row_diff, col_diff)
                 distances.append(dist)
+                region_indices.append(i)
         
-        return np.array(distances)
+        return np.array(distances), np.array(region_indices)
     
     def update_histogram(region_idx):
         """Update the histogram for the selected region."""
@@ -106,53 +118,59 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
         hist_plot[0] = None
         
         # Calculate distances from selected region to all other regions
-        distances = calculate_distances(region_idx)
+        distances, other_region_indices = calculate_distances(region_idx)
         
         if len(distances) == 0:
-            ax.set_title(f'Distance Histogram - Selected Region: {region_idx:02d} (No data)', 
+            influence_type_str = current_influence_type[0].capitalize()
+            ax.set_title(f'Distance Histogram - Selected Region: {region_idx:02d} ({influence_type_str} Influence - No data)', 
                         fontsize=14, pad=5)
             fig.canvas.draw_idle()
             return
         
-        # Determine how many regions to include based on percentage
-        total_regions = len(distances)
-        if current_percent[0] == '10%':
-            n_regions = max(1, int(0.1 * total_regions))
-        elif current_percent[0] == '50%':
-            n_regions = max(1, int(0.5 * total_regions))
-        else:  # 100%
-            n_regions = total_regions
+        # Get selected region key
+        selected_region_key = f'region_{region_idx:02d}'
         
-        # Sort distances and take top N (closest regions)
-        sorted_indices = np.argsort(distances)
-        selected_distances = distances[sorted_indices[:n_regions]]
+        # Sum influence values for each distance
+        # For each distance from 0 to 8, sum the influence of selected region on regions at that distance
+        distance_influence_sums = np.zeros(9)  # 0 to 8
         
-        # Create histogram
-        if len(selected_distances) > 0:
-            # Use integer bins since distances are discrete (0, 1, 2, 3, ...)
-            max_dist = int(np.max(selected_distances))
-            # Create bins for each integer distance value
-            bins = np.arange(max_dist + 2) - 0.5  # Shift by 0.5 to center bins on integers
-            
-            hist_plot[0], bins, _ = ax.hist(selected_distances, bins=bins, 
-                                            color='steelblue', alpha=0.7, 
-                                            edgecolor='black', linewidth=1.2)
-            
-            # Set x-axis ticks to integer values
-            ax.set_xticks(np.arange(max_dist + 1))
-            ax.set_xticklabels([str(i) for i in range(max_dist + 1)])
-            
-            # Update title
-            percent_str = current_percent[0]
-            ax.set_title(f'Distance Histogram - Selected Region: {region_idx:02d} ({percent_str} regions)', 
-                        fontsize=14, pad=5)
-        else:
-            ax.set_title(f'Distance Histogram - Selected Region: {region_idx:02d} (No data)', 
-                        fontsize=14, pad=5)
+        # For each other region, get its distance and influence value
+        for i in range(len(distances)):
+            dist = int(distances[i])
+            if dist <= 8:  # Only consider distances 0-8
+                other_region_idx = other_region_indices[i]
+                other_region_key = f'region_{other_region_idx:02d}'
+                
+                # Get influence of selected region on this other region
+                # This is stored in other_region's influences dict under selected_region_key
+                if other_region_key in current_regions_data[0]:
+                    other_region_influences = current_regions_data[0][other_region_key].get('influences', {})
+                    influence_value = other_region_influences.get(selected_region_key, 0.0)
+                    distance_influence_sums[dist] += influence_value
+        
+        # For negative influences, convert to absolute values for display
+        if current_influence_type[0] == 'negative':
+            distance_influence_sums = np.abs(distance_influence_sums)
+        
+        # Create bar graph
+        distances_x = np.arange(9)  # 0 to 8
+        hist_plot[0] = ax.bar(distances_x, distance_influence_sums, 
+                             color='steelblue', alpha=0.7, 
+                             edgecolor='black', linewidth=1.2)
+        
+        # Set x-axis ticks to integer values (0 to 8)
+        ax.set_xticks(distances_x)
+        ax.set_xticklabels([str(i) for i in range(9)])
+        ax.set_xlim(-0.5, 8.5)  # Fixed x-axis range
+        
+        # Update title
+        influence_type_str = current_influence_type[0].capitalize()
+        ax.set_title(f'Distance Histogram - Selected Region: {region_idx:02d} ({influence_type_str} Influence)', 
+                    fontsize=14, pad=5)
         
         # Set labels
         ax.set_xlabel('Distance from Selected Region (in regions)', fontsize=12)
-        ax.set_ylabel('Number of Regions', fontsize=12)
+        ax.set_ylabel('Sum of Influence Values', fontsize=12)
         
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
@@ -195,23 +213,18 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
         if val < num_regions - 1:
             slider_region.set_val(val + 1)
     
-    def on_top10_click(event):
-        """Handle Top 10% button click."""
-        current_percent[0] = '10%'
+    def on_positive_click(event):
+        """Handle positive influence button click."""
+        current_influence_type[0] = "positive"
+        current_regions_data[0] = load_influence_data("positive")
         update_button_colors()
         update_histogram(selected_region[0])
         fig.canvas.draw_idle()
     
-    def on_top50_click(event):
-        """Handle Top 50% button click."""
-        current_percent[0] = '50%'
-        update_button_colors()
-        update_histogram(selected_region[0])
-        fig.canvas.draw_idle()
-    
-    def on_100_click(event):
-        """Handle 100% button click."""
-        current_percent[0] = '100%'
+    def on_negative_click(event):
+        """Handle negative influence button click."""
+        current_influence_type[0] = "negative"
+        current_regions_data[0] = load_influence_data("negative")
         update_button_colors()
         update_histogram(selected_region[0])
         fig.canvas.draw_idle()
@@ -220,9 +233,8 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
     slider_region.on_changed(slider_update)
     btn_r_minus.on_clicked(r_minus)
     btn_r_plus.on_clicked(r_plus)
-    btn_top10.on_clicked(on_top10_click)
-    btn_top50.on_clicked(on_top50_click)
-    btn_100.on_clicked(on_100_click)
+    btn_positive.on_clicked(on_positive_click)
+    btn_negative.on_clicked(on_negative_click)
     
     # Initialize button colors
     update_button_colors()
@@ -241,8 +253,8 @@ def plot_region_histogram(regions_data, yref_shape=(192, 288)):
 
 def main():
     """Main function to load data and create the histogram."""
-    print("Loading regions data...")
-    regions_data = np.load(os.path.join(TOOL_DATA_DIR, 'regions_data.npy'), allow_pickle=True).item()
+    print("Loading regions data (positive influence, default)...")
+    regions_data = np.load(os.path.join(TOOL_DATA_DIR, 'regions_data_positive.npy'), allow_pickle=True).item()
     
     print(f"Loaded {len(regions_data)} regions")
     
