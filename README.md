@@ -202,6 +202,16 @@ To compute influences from scratch using the MMGN model, download the complete f
    python test_influence.py
    ```
 
+**Tips:**
+- **Capture all output to a file for easier debugging and record-keeping:**
+  ```bash
+  python test_influence.py > test_influence_output.txt 2>&1
+  ```
+- **Run in the background on a remote server so it keeps running after you disconnect (Linux/macOS):**
+  ```bash
+  nohup python test_influence.py > test_influence_output.txt 2>&1 &
+  ```
+
 **Important Notes:**
 - The `test_influence.py` file is the main entry point for computing influences. It calls other methods and models from the other files in the folder.
 - The `mmgn_env.yml` file contains the conda environment configuration needed to ensure all dependencies are properly installed.
